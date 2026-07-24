@@ -45,17 +45,23 @@ class ControlMySpaClient:
             "User-Agent": "Mozilla/5.0"
         }
     
-        # Fetch user profile to extract spa ID
+        # Fetch user profile (mainly to validate the token)
         response = self.session.get(PROFILE_URL, headers=headers)
         response.raise_for_status()
-        
-        # Extract spa ID from user profile
-        profile_data = response.json().get("data", {})
-        user_data = profile_data.get("user", {})
-        self.spa_id = user_data.get("_id")
-        
+
+        # Fetch the actual spa ID from the spa list. The profile's user "_id"
+        # is the account ID, not the spa ID, and using it causes a 403 when
+        # fetching spa data.
+        spa_response = self.session.get("https://iot.controlmyspa.com/spas", headers=headers)
+        spa_response.raise_for_status()
+
+        spas = spa_response.json().get("data", {}).get("spas", [])
+        if not spas:
+            raise ValueError("No spas found in account")
+
+        self.spa_id = spas[0].get("_id")
         if not self.spa_id:
-            raise ValueError("Spa ID could not be extracted from profile response")
+            raise ValueError("Spa ID could not be extracted from spa list response")
     
     
     def fetch_spa_data(self):
