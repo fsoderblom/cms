@@ -65,32 +65,38 @@ class ControlMySpaClient:
     
     
     def fetch_spa_data(self):
+        # The /spas/{id} endpoint has been observed to serve a stale,
+        # frozen snapshot (unchanged since registration) on some accounts.
+        # The /spas list endpoint stays live, so use it as the source of
+        # truth for temperature/error/mode and only fall back to
+        # /spas/{id} for per-component (pump/filter/light) state, which
+        # isn't included in the list response.
+        list_headers = {
+            "Authorization": f"Bearer {self.token}",
+            "User-Agent": "Mozilla/5.0"
+        }
+        spa_response = self.session.get("https://iot.controlmyspa.com/spas", headers=list_headers)
+        spa_response.raise_for_status()
+
+        spas = spa_response.json().get("data", {}).get("spas", [])
+        if not spas:
+            raise ValueError("No spas found in account")
+
+        current_state = dict(spas[0].get("currentState", {}))
+
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": f"https://iot.controlmyspa.com/portal/spas/{self.spa_id}",
             "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors", 
+            "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin",
             "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
         }
         url = SPA_URL_TEMPLATE.format(self.spa_id)
         response = self.session.get(url, headers=headers)
+        if response.status_code == 200 and response.text.strip():
+            current_state["components"] = response.json().get("currentState", {}).get("components", [])
 
-        # If we get an empty response, try to get the correct spa ID from spa list
-        if response.status_code == 200 and not response.text.strip():
-            spa_list_response = self.session.get("https://iot.controlmyspa.com/spas", headers=headers)
-            
-            if spa_list_response.status_code == 200 and spa_list_response.text.strip():
-                spa_list_data = spa_list_response.json()
-                spas = spa_list_data.get("data", {}).get("spas", [])
-                if spas:
-                    actual_spa_id = spas[0].get("_id")
-                    if actual_spa_id:
-                        self.spa_id = actual_spa_id
-                        # Return the spa data directly from the spa list response
-                        return spas[0]
-
-        response.raise_for_status()
-        return response.json()
+        return {"currentState": current_state}
